@@ -34,7 +34,41 @@ $ npm run dev
 ```
 
 Open up <http://localhost:3000/> and verify that we see the Blues
-Stack default home page.  Great!
+Stack default home page. Great!
+
+## Fix the audit warning `express-prometheus-middleware@1.2.0`
+
+As of the time of this writing, the Remix Blues Stack depends on
+`express-prometheus-middleware`, which pulls in an optional
+dependency that has a security advisory against it. We can work
+around that pretty easily, thankfully:
+
+```
+npm rm express-prometheus-middleware
+npm install @isaacs/express-prometheus-middleware
+```
+
+This is just a fork that doesn't have the optional dep included.
+
+```
+$ npm audit
+found 0 vulnerabilities
+```
+
+## Test the Un-Monetized App
+
+From the Blues Stack docs:
+
+> The database seed script creates a new user with some data you
+> can use to get started:
+>
+> - Email: `rachel@remix.run`
+> - Password: `racheliscool`
+
+Head over to <http://localhost:3000/> and make sure you can log
+in and create some notes.
+
+Ok, time to set up pricing!
 
 ## Install Tier Binary
 
@@ -61,23 +95,27 @@ $ tier version
   go version: go1.20rc2
 ```
 
-## Fix the audit warning `express-prometheus-middleware@1.2.0`
+### Connect Tier to Stripe
 
-As of the time of this writing, the Remix Blues Stack depends on
-`express-prometheus-middleware`, which pulls in an optional
-dependency that has a security advisory against it.  We can work
-around that pretty easily, thankfully:
+If this is your first time installing Tier, you'll need to
+connect it to your Stripe account.
+
+Run [`tier connect`](https://www.tier.run/docs/cli/connect) to do
+this.
+
+## Create a Tier Sandbox
+
+To create a little sandbox to operate in, let's use the [`tier
+switch -c`](https://www.tier.run/docs/cli/switch) command.
+
+That way, any time we want to start over, we can just delete the
+`tier.state` file and run `tier switch -c` again to get a brand
+new clean slate. Also, add `tier.state` to .gitignore so we
+don't leak that accidentally.
 
 ```
-npm rm express-prometheus-middleware
-npm install @isaacs/express-prometheus-middleware
-```
-
-This is just a fork that doesn't have the optional dep included.
-
-```
-$ npm audit
-found 0 vulnerabilities
+echo "tier.state" >> .gitignore
+tier switch -c
 ```
 
 ## Install Tier SDK
@@ -89,25 +127,120 @@ sdk](https://www.npmjs.com/package/tier).
 npm install tier
 ```
 
-## Test the Un-Monetized App
+## Create a Pricing Model
 
-From the Blues Stack docs:
+For this, we're going to use the [Tier Plan
+Builder](https://model.tier.run/).
 
+The model we're going to use is 4 plans:
 
-> The database seed script creates a new user with some data you can use to get started:
->
-> - Email: `rachel@remix.run`
-> - Password: `racheliscool`
+### Free Plan
 
-If you'd prefer not to use Docker, you can also use Fly's Wireguard VPN to connect to a development database (or even your production database). You can find the instructions to set up Wireguard [here](https://fly.io/docs/reference/private-networking/#install-your-wireguard-app), and the instructions for creating a development database [here](https://fly.io/docs/reference/postgres/).
+- 5 notes allowed
+- Up to 100 edits per month
+- No charge
 
-### Relevant code:
+### Basic Plan
 
-This is a pretty simple note-taking app, but it's a good example of how you can build a full stack app with Prisma and Remix. The main functionality is creating users, logging in and out, and creating and deleting notes.
+- Up to 20 notes allowed. First 5 notes are free, and then a
+  flat fee of $5 per month if they're over 5.
+- No limit on the number of edits! First 1000 edits per month
+  free, then $0.001 per edit (ie, $0.01 per 10 edits.)
 
-- creating users, and logging in and out [./app/models/user.server.ts](./app/models/user.server.ts)
-- user sessions, and verifying them [./app/session.server.ts](./app/session.server.ts)
-- creating, and deleting notes [./app/models/note.server.ts](./app/models/note.server.ts)
+To do this, we create two metered features with the appropriate
+limits, and no charges.
+
+Note that `feature:notes:total` sets the aggregate value to
+"Maximum usage value", since we want to always charge based on
+the total number of notes last reported, even if there hasn't
+been any change during the billing period.
+
+We also set the "Mode" to "Volume" to keep it consistent with the
+other plans.
+
+### Pro Plan
+
+- No limit on the number of notes! First 5 are free, then a flat
+  fee of $5 if they stay below 20 notes (like the Basic plan),
+  and or a flat monthly fee of $20 up to 200 notes, or $0.10 per
+  note if they're over 200.
+- No limit on the number of edits! First 1000 edits are free,
+  then $0.001 per edit up to 10,000 edits (ie, $0.01 per 10
+  edits), and then $0.0005 per edit (ie, $0.01 per 20 edits).
+
+To do this, we define our tiers just like the Free plan, but with
+an extra tier on each.
+
+Here, the "Volume" mode on the `feature:notes:total` is relevant,
+because we want a user with 200 notes to be charged $20, not $25.
+Then when they cross over to 201 notes, their price will go up to
+$20.10. For 202 notes, $20.20, and so on. So we're charging
+based on the _total_ volume, not breaking out the charge for
+total notes in graduated levels.
+
+### Pay As You Go Plan
+
+- No limits on anything, and no flat rates!
+- First 5 notes are free, then $1 per note.
+- First 1000 edits are free, then $0.001 per edit (ie, $0.01 per
+  10 edits).
+
+On this one, we set the `feature:notes:total` mode to
+"Graduated". So a user with 6 notes will be charged $0 for the
+first 5, then $1.00 for the sixth. 7 notes will cost $2.00, 8
+will cost $3.00, and so on.
+
+At 10 notes, it makes sense for them to switch to the Basic plan,
+and at 25 notes, it makes sense for them to switch to the Pro plan,
+which is what we want to encourage.
+
+## Result
+
+Check out [the result in the Plan
+Builder](https://model.tier.run/cldc4667n4anxhof5n6x0ps6i).
+
+Let's push it!
+
+```
+$ tier push https://model.tier.run/cldc4667n4anxhof5n6x0ps6i
+ok	plan:free@1	feature:notes:edit	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG404Eht4IU5DCbQwPfQgi	[created]
+ok	plan:basic@1	feature:notes:edit	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG404Eht4IU5DCPQGkV7Vn	[created]
+ok	plan:basic@1	feature:notes:total	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG404Eht4IU5DCWSDxROIT	[created]
+ok	plan:paygo@1	feature:notes:edit	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG404Eht4IU5DCDRdxFUP0	[created]
+ok	plan:paygo@1	feature:notes:total	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG414Eht4IU5DCHg2RrYEd	[created]
+ok	plan:free@1	feature:notes:total	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG414Eht4IU5DCsFnlIdBL	[created]
+ok	plan:pro@1	feature:notes:total	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG414Eht4IU5DC3XFeSCmC	[created]
+ok	plan:pro@1	feature:notes:edit	https://dashboard.stripe.com/acct_1MSTLm4Eht4IU5DC/prices/price_1MUG414Eht4IU5DCQvm5k3nM	[created]
+```
+
+At this point, we can click on those the urls that Tier prints to
+see the plans in Stripe, or run `tier pull` to see the result in
+JSON format.
+
+## Creating the Pricing Page
+
+We can use the `tier.pullLatest()` method to pull the latest
+version of each plan in our model, and then use that to create a
+pricing page. {{TK link to pricing page edit, and url in live
+demo}}
+
+Use `tier.checkout()` to subscribe when they click the sign up
+button.
+
+## Default Free Plan
+
+Update the app/models/user.server.ts model to subscribe users to
+the latest `plan:free@...` if they're not subscribed to anything,
+and on user creation.
+
+## Cancel Plans when deleting users
+
+When deleting an account, call `tier.cancel()` to cancel their
+plan.
+
+---
+
+the rest is the remix blues stack readme
 
 ## Deployment
 
@@ -128,8 +261,8 @@ Prior to your first deployment, you'll need to do a few things:
 - Create two apps on Fly, one for staging and one for production:
 
   ```sh
-  fly apps create tier-remix-demo-ef1a
-  fly apps create tier-remix-demo-ef1a-staging
+  fly apps create tier-remix-demo
+  fly apps create tier-remix-demo-staging
   ```
 
   > **Note:** Once you've successfully created an app, double-check the `fly.toml` file to ensure that the `app` key is the name of the production app you created. This Stack [automatically appends a unique suffix at init](https://github.com/remix-run/blues-stack/blob/4c2f1af416b539187beb8126dd16f6bc38f47639/remix.init/index.js#L29) which may not match the apps you created on Fly. You will likely see [404 errors in your Github Actions CI logs](https://community.fly.io/t/404-failure-with-deployment-with-remix-blues-stack/4526/3) if you have this mismatch.
@@ -146,19 +279,24 @@ Prior to your first deployment, you'll need to do a few things:
   git remote add origin <ORIGIN_URL>
   ```
 
-- Add a `FLY_API_TOKEN` to your GitHub repo. To do this, go to your user settings on Fly and create a new [token](https://web.fly.io/user/personal_access_tokens/new), then add it to [your repo secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets) with the name `FLY_API_TOKEN`.
+- Add a `FLY_API_TOKEN` to your GitHub repo. To do this, go to
+  your user settings on Fly and create a new
+  [token](https://web.fly.io/user/personal_access_tokens/new),
+  then add it to [your repo
+  secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
+  with the name `FLY_API_TOKEN`.
 
 - Add a `SESSION_SECRET` to your fly app secrets, to do this you can run the following commands:
 
   ```sh
-  fly secrets set SESSION_SECRET=$(openssl rand -hex 32) --app tier-remix-demo-ef1a
-  fly secrets set SESSION_SECRET=$(openssl rand -hex 32) --app tier-remix-demo-ef1a-staging
+  fly secrets set SESSION_SECRET=$(openssl rand -hex 32) --app tier-remix-demo
+  fly secrets set SESSION_SECRET=$(openssl rand -hex 32) --app tier-remix-demo-staging
   ```
 
   > **Note:** When creating the staging secret, you may get a warning from the Fly CLI that looks like this:
   >
   > ```
-  > WARN app flag 'tier-remix-demo-ef1a-staging' does not match app name in config file 'tier-remix-demo-ef1a'
+  > WARN app flag 'tier-remix-demo-staging' does not match app name in config file 'tier-remix-demo'
   > ```
   >
   > This simply means that the current directory contains a config that references the production app we created in the first step. Ignore this warning and proceed to create the secret.
@@ -168,11 +306,11 @@ Prior to your first deployment, you'll need to do a few things:
 - Create a database for both your staging and production environments. Run the following:
 
   ```sh
-  fly postgres create --name tier-remix-demo-ef1a-db
-  fly postgres attach --app tier-remix-demo-ef1a tier-remix-demo-ef1a-db
+  fly postgres create --name tier-remix-demo-db
+  fly postgres attach --app tier-remix-demo tier-remix-demo-db
 
-  fly postgres create --name tier-remix-demo-ef1a-staging-db
-  fly postgres attach --app tier-remix-demo-ef1a-staging tier-remix-demo-ef1a-staging-db
+  fly postgres create --name tier-remix-demo-staging-db
+  fly postgres attach --app tier-remix-demo-staging tier-remix-demo-staging-db
   ```
 
   > **Note:** You'll get the same warning for the same reason when attaching the staging database that you did in the `fly set secret` step above. No worries. Proceed!
