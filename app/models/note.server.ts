@@ -1,4 +1,6 @@
-import type { User, Note } from "@prisma/client";
+import type { Note, User } from "@prisma/client";
+
+import tier from "~/models/tier.server";
 
 import { prisma } from "~/db.server";
 
@@ -16,21 +18,40 @@ export function getNote({
   });
 }
 
-export function getNoteListItems({ userId }: { userId: User["id"] }) {
-  return prisma.note.findMany({
-    where: { userId },
-    select: { id: true, title: true },
-    orderBy: { updatedAt: "desc" },
-  });
+export async function getNoteListItems({ userId }: { userId: User["id"] }) {
+  return prisma.note
+    .findMany({
+      where: { userId },
+      select: { id: true, title: true },
+      orderBy: { updatedAt: "desc" },
+    })
+    .then((items) => {
+      tier
+        .report(`org:${userId}`, "feature:notes:total", items.length)
+        .catch(() => {});
+      return items;
+    });
 }
 
-export function createNote({
+export async function createNote({
   body,
   title,
   userId,
 }: Pick<Note, "body" | "title"> & {
   userId: User["id"];
 }) {
+  // see if we're at our limit
+  const answer = await tier
+    .can(`org:${userId}`, `feature:notes:total`)
+  if (!answer.ok) {
+    throw Object.assign(new Error("cannot create note, at plan limit"), {
+      cause: {
+        status: 402,
+        code: "plan_limit",
+      },
+    });
+  }
+
   return prisma.note.create({
     data: {
       title,
@@ -44,11 +65,13 @@ export function createNote({
   });
 }
 
-export function deleteNote({
+export async function deleteNote({
   id,
   userId,
 }: Pick<Note, "id"> & { userId: User["id"] }) {
-  return prisma.note.deleteMany({
+  const result = await prisma.note.deleteMany({
     where: { id, userId },
   });
+  await getNoteListItems({ userId });
+  return result;
 }

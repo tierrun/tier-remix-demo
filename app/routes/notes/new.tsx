@@ -1,9 +1,10 @@
-import type { ActionArgs } from "@remix-run/node";
+import type { ActionArgs, LoaderArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
-import { Form, useActionData } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData } from "@remix-run/react";
 import * as React from "react";
 
 import { createNote } from "~/models/note.server";
+import tier from "~/models/tier.server";
 import { requireUserId } from "~/session.server";
 
 export async function action({ request }: ActionArgs) {
@@ -15,24 +16,46 @@ export async function action({ request }: ActionArgs) {
 
   if (typeof title !== "string" || title.length === 0) {
     return json(
-      { errors: { title: "Title is required", body: null } },
+      { errors: { code: "", title: "Title is required", body: null } },
       { status: 400 }
     );
   }
 
   if (typeof body !== "string" || body.length === 0) {
     return json(
-      { errors: { body: "Body is required", title: null } },
+      { errors: { code: "", body: "Body is required", title: null } },
       { status: 400 }
     );
   }
 
-  const note = await createNote({ title, body, userId });
+  try {
+    const note = await createNote({ title, body, userId });
+    return redirect(`/notes/${note.id}`);
+  } catch (er) {
+    const noteEr = er as Error & {
+      cause: {
+        status: number;
+        code: string;
+      };
+    };
+    return json(
+      {
+        errors: { code: noteEr.cause.code, title: noteEr.message, body: null },
+      },
+      { status: noteEr.cause.status }
+    );
+  }
+}
 
-  return redirect(`/notes/${note.id}`);
+export async function loader({ request }: LoaderArgs) {
+  const userId = await requireUserId(request);
+  // can they create a new note?
+  const answer = await tier.can(`org:${userId}`, "feature:notes:total");
+  return json(answer);
 }
 
 export default function NewNotePage() {
+  const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const titleRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLTextAreaElement>(null);
@@ -45,7 +68,27 @@ export default function NewNotePage() {
     }
   }, [actionData]);
 
-  return (
+  return loaderData?.ok === false ? (
+    <>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          width: "100%",
+        }}
+      >
+        <div className="pt-1 text-red-700" id="title-error">
+          <>
+            Cannot create note, at plan limit.{" "}
+            <Link className="text-blue-500" to="/pricing">
+              Upgrade your plan
+            </Link>
+          </>
+        </div>
+      </div>
+    </>
+  ) : (
     <Form
       method="post"
       style={{
@@ -71,6 +114,16 @@ export default function NewNotePage() {
         {actionData?.errors?.title && (
           <div className="pt-1 text-red-700" id="title-error">
             {actionData.errors.title}
+            {actionData.errors.code === "plan_limit" ? (
+              <>
+                {" "}
+                <Link className="text-blue-500" to="/pricing">
+                  Upgrade your plan
+                </Link>
+              </>
+            ) : (
+              ""
+            )}
           </div>
         )}
       </div>
