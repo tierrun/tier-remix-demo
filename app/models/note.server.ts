@@ -6,6 +6,46 @@ import { prisma } from "~/db.server";
 
 export type { Note } from "@prisma/client";
 
+export async function editNote({
+  id,
+  userId,
+  title,
+  body,
+}: Pick<Note, "id"> &
+  Pick<Note, "title"> &
+  Pick<Note, "body"> & { userId: User["id"] }) {
+  const note = await prisma.note.findFirst({
+    select: { id: true },
+    where: { id, userId },
+  });
+
+  if (!note) {
+    throw Object.assign(new Error("note not found"), {
+      cause: {
+        status: 404,
+        code: "note_not_found",
+      },
+    });
+  }
+
+  const answer = await tier.can(`org:${userId}`, "feature:notes:edit");
+  if (!answer.ok) {
+    throw Object.assign(new Error("cannot edit note, at plan limit"), {
+      cause: {
+        status: 402,
+        code: "plan_limit",
+      },
+    });
+  }
+
+  answer.report();
+
+  return prisma.note.update({
+    where: { id },
+    data: { title, body },
+  });
+}
+
 export function getNote({
   id,
   userId,

@@ -1,6 +1,6 @@
 import type { ActionArgs, LoaderArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
-import { Form, useCatch, useLoaderData } from "@remix-run/react";
+import { Form, Link, useCatch, useLoaderData } from "@remix-run/react";
 import invariant from "tiny-invariant";
 
 import { deleteNote, getNote } from "~/models/note.server";
@@ -35,9 +35,15 @@ export default function NoteDetailsPage() {
       <p className="py-6">{data.note.body}</p>
       <hr className="my-4" />
       <Form method="post">
+        <Link
+          className="mx-2 inline-block rounded bg-blue-500 py-2 px-4 text-white hover:bg-blue-600 focus:bg-blue-400"
+          to={`/notes/edit/${data.note.id}`}
+        >
+          Edit
+        </Link>
         <button
           type="submit"
-          className="rounded bg-blue-500  py-2 px-4 text-white hover:bg-blue-600 focus:bg-blue-400"
+          className="line-height-2 cursor-pointer rounded bg-blue-500 py-2 px-4 text-white hover:bg-blue-600 focus:bg-blue-400"
         >
           Delete
         </button>
