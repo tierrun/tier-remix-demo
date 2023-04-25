@@ -7,17 +7,33 @@ import tier, { isTierError } from "~/models/tier.server";
 
 export type { User } from "@prisma/client";
 
+const checking = new Map<User["id"], Promise<void>>();
 export async function freePlanDefault(id: User["id"]) {
-  await tier.lookupPhase(`org:${id}`).catch(async (er) => {
+  const inflight = checking.get(id);
+  if (inflight) return inflight;
+  const check = subscribeIfNotSubscribed(id).then(() => {
+    checking.delete(id);
+  });
+  checking.set(id, check);
+  return check;
+}
+
+async function subscribeIfNotSubscribed(id: User["id"]) {
+  try {
+    await tier.lookupPhase(`org:${id}`);
+    return;
+  } catch (er) {
     if (isTierError(er) && er.code === "org_not_found") {
       const { plans } = await tier.pullLatest();
       for (const plan of Object.keys(plans)) {
         if (plan.startsWith("plan:free@")) {
-          return tier.subscribe(`org:${id}`, plan as PlanName);
+          await tier.subscribe(`org:${id}`, plan as PlanName);
+          return;
         }
       }
     }
-  });
+    throw er;
+  }
 }
 
 export async function getUserById(id: User["id"]) {
